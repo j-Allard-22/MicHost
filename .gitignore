@@ -1,0 +1,13 @@
+# Build output
+build/
+
+# Vendored JUCE (re-clone: git clone --depth 1 --branch 8.0.14 https://github.com/juce-framework/JUCE.git external/JUCE)
+external/JUCE/
+
+# VST2 SDK headers: legally EOL, personal use only — never commit or redistribute
+sdks/
+
+# Editor/OS noise
+.vs/
+*.user
+Thumbs.db
