@@ -11,6 +11,7 @@
 
 #include "AudioEngine.h"
 #include "MainComponent.h"
+#include "PluginScanning.h"
 
 //==============================================================================
 class MainWindow : public juce::DocumentWindow
@@ -136,16 +137,30 @@ class MicHostApplication : public juce::JUCEApplication
 public:
     const juce::String getApplicationName() override    { return "MicHost"; }
     const juce::String getApplicationVersion() override { return "0.1.0"; }
-    // Single instance for the tray app, but let the --list-devices diagnostic
-    // run even while the tray instance is up (otherwise JUCE forwards the
-    // command line to the running instance and this process exits silently).
+    // Single instance for the tray app, but two kinds of secondary process
+    // must be allowed through (otherwise JUCE forwards their command line to
+    // the running instance and they exit silently): the --list-devices
+    // diagnostic, and the plugin-scanner worker this exe respawns as.
     bool moreThanOneInstanceAllowed() override
     {
-        return getCommandLineParameters().contains ("--list-devices");
+        return getCommandLineParameters().contains ("--list-devices")
+            || getCommandLineParameters().contains ("--" + juce::String (scannerProcessUID) + ":");
     }
 
     void initialise (const juce::String& commandLine) override
     {
+        // Scanner-worker check must come first: a worker instance must never
+        // create the properties file, engine, window, tray icon or logger.
+        auto scannerSubprocess = std::make_unique<PluginScannerSubprocess>();
+
+        if (scannerSubprocess->initialiseFromCommandLine (commandLine, scannerProcessUID))
+        {
+            storedScannerSubprocess = std::move (scannerSubprocess);
+            return;
+        }
+
+        scannerSubprocess = nullptr;
+
         if (commandLine.contains ("--list-devices"))
         {
             listDevicesAndQuit();
@@ -275,6 +290,7 @@ private:
 
     juce::ApplicationProperties appProperties;
     std::unique_ptr<juce::FileLogger> fileLogger;
+    std::unique_ptr<PluginScannerSubprocess> storedScannerSubprocess;
     std::unique_ptr<AudioEngine> engine;
     std::unique_ptr<MainWindow> mainWindow;
     std::unique_ptr<TrayIcon> trayIcon;

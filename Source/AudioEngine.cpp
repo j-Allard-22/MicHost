@@ -1,4 +1,5 @@
 #include "AudioEngine.h"
+#include "PluginScanning.h"
 
 AudioEngine::AudioEngine (juce::PropertiesFile& propertiesFile)
     : props (propertiesFile)
@@ -13,6 +14,10 @@ AudioEngine::~AudioEngine()
 void AudioEngine::initialise()
 {
     juce::addDefaultFormatsToManager (formatManager);
+
+    // Probe plugin files in a throwaway child process so a crashing plugin
+    // can't take the host down mid-scan.
+    knownPlugins.setCustomScanner (std::make_unique<CustomPluginScanner>());
 
     if (auto xml = props.getXmlValue ("pluginList"))
         knownPlugins.recreateFromXml (*xml);
