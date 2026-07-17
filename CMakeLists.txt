@@ -31,7 +31,8 @@ juce_generate_juce_header(MicHost)
 target_sources(MicHost PRIVATE
     Source/Main.cpp
     Source/AudioEngine.cpp
-    Source/MainComponent.cpp)
+    Source/MainComponent.cpp
+    Source/RateMatchedBridge.cpp)
 
 target_compile_definitions(MicHost PRIVATE
     JUCE_WASAPI=1

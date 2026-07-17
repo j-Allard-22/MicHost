@@ -2,6 +2,8 @@
 
 #include <JuceHeader.h>
 
+#include "RateMatchedBridge.h"
+
 namespace michost
 {
     // All diagnostic lines carry a wall-clock stamp so soak-test logs can be
@@ -13,10 +15,13 @@ namespace michost
     }
 }
 
-// Owns the audio device, the processor graph (mic in -> serial plugin chain ->
-// cable out) and chain persistence. All chain mutations must happen on the
-// message thread; AudioProcessorGraph makes topology changes safe against the
-// running audio thread.
+// Owns the audio devices, the processor graph (mic in -> serial plugin chain
+// -> cable out) and chain persistence. The mic and the cable are two
+// independently-clocked WASAPI endpoints, so they live on two separate
+// AudioDeviceManagers joined by a RateMatchedBridge that fans out mono mics,
+// rate-matches the clocks and drives the graph from the render side.
+// All chain mutations must happen on the message thread; AudioProcessorGraph
+// makes topology changes safe against the running audio thread.
 class AudioEngine : private juce::ChangeListener,
                     private juce::Timer
 {
@@ -27,7 +32,7 @@ public:
     void initialise();
     void shutdown();
 
-    juce::AudioDeviceManager deviceManager;
+    juce::AudioDeviceManager inputDeviceManager, outputDeviceManager;
     juce::AudioPluginFormatManager formatManager;
     juce::KnownPluginList knownPlugins;
 
@@ -46,10 +51,18 @@ public:
     void movePlugin (int index, int delta);
 
     int getTotalPluginLatencySamples() const;
+
+    // The render-side (cable) rate: the rate the graph runs at.
     double getCurrentSampleRate() const;
 
-    // Total xruns across device reopens (the raw device counter resets to zero
-    // every time the device restarts, which makes it useless for soak tests).
+    const RateMatchedBridge& getBridge() const noexcept { return bridge; }
+
+    // True when the selected input device looks like a virtual-cable endpoint,
+    // which would feed the cable back into itself.
+    bool inputLooksLikeVirtualCable() const;
+
+    // Total xruns across both devices and across device reopens (each raw
+    // counter resets to zero on reopen, useless for soak tests by itself).
     int getCumulativeXRuns() const noexcept { return cumulativeXRuns; }
 
     // At-a-glance state for the tray icon. "degraded" = running but on the
@@ -58,17 +71,13 @@ public:
     Health getHealth() const noexcept { return health; }
     juce::String getHealthText() const { return healthText; }
 
-    // Called by the UI when the user touches the device selector; device-setup
+    // Called by the UI when the user touches a device selector; device-setup
     // changes shortly after are adopted as the new *desired* devices. Changes
     // with any other cause (login race, unplug, fallback) never are.
     void noteUserDeviceInteraction() noexcept { lastUserInteractionMs = juce::Time::getMillisecondCounter(); }
 
     // Supplied by the app shell: true while the main window is visible.
     std::function<bool()> isUserInteracting;
-
-    // True when the selected input device looks like a virtual-cable endpoint,
-    // which would feed the cable back into itself.
-    bool inputLooksLikeVirtualCable() const;
 
     void saveState();
     juce::File getDeadMansPedalFile() const;
@@ -85,12 +94,26 @@ private:
         std::unique_ptr<juce::XmlElement> unloadedXml; // non-null = missing plugin; holds the saved SLOT verbatim
     };
 
+    // Per-side watchdog bookkeeping (input side and output side reconcile
+    // independently - the mic can vanish while the cable stays up).
+    struct WatchedSide
+    {
+        juce::AudioDeviceManager* manager;
+        juce::String propsKey;      // desired-name persistence key
+        juce::String desired;
+        bool isInput;
+        int nextReconcileTick = 0, backoffSeconds = 5;
+        bool loggedWaiting = false;
+    };
+
     void changeListenerCallback (juce::ChangeBroadcaster* source) override;
     void timerCallback() override;
     void logCurrentDeviceState (const juce::String& context) const;
-    void adoptCurrentSetupAsDesired (const juce::String& reason);
+    void adoptSideAsDesired (WatchedSide& side, const juce::String& reason);
     void runDeviceWatchdog();
+    void reconcileSide (WatchedSide& side);
     void updateHealth();
+    void accumulateXRuns (juce::AudioDeviceManager& manager, int& lastSeen, const char* label);
     void rebuildConnections();
     void restoreChain();
     void saveChain();
@@ -99,21 +122,17 @@ private:
 
     juce::PropertiesFile& props;
     juce::AudioProcessorGraph graph;
-    juce::AudioProcessorPlayer player;
+    RateMatchedBridge bridge { graph };
     juce::AudioProcessorGraph::NodeID inputNodeID, outputNodeID;
     std::vector<Slot> chain;
     bool hasShutDown = false;
 
-    int lastSeenXRuns = 0, cumulativeXRuns = 0, timerTicks = 0;
+    int lastSeenXRunsIn = 0, lastSeenXRunsOut = 0, cumulativeXRuns = 0, timerTicks = 0;
 
-    // Watchdog state: the devices the user actually chose. The manager may
-    // drift off them (login race, unplug, WASAPI session expiry) and is
-    // steered back whenever they reappear.
-    juce::String desiredInput, desiredOutput;
+    WatchedSide inputSide  { &inputDeviceManager,  "desiredInputDevice",  {}, true };
+    WatchedSide outputSide { &outputDeviceManager, "desiredOutputDevice", {}, false };
     juce::uint32 lastUserInteractionMs = 0;
     bool reconciling = false;
-    int nextReconcileTick = 0, reconcileBackoffSeconds = 5;
-    bool loggedWaitingForDevice = false;
 
     Health health = Health::noDevice;
     juce::String healthText;

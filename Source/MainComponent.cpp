@@ -38,9 +38,14 @@ public:
 //==============================================================================
 MainComponent::MainComponent (AudioEngine& engineToUse)
     : engine (engineToUse),
-      deviceSelector (engineToUse.deviceManager,
-                      1, 2,     // input channels: mono mic up to stereo
-                      2, 2,     // output channels: the cable is stereo
+      inputSelector (engineToUse.inputDeviceManager,
+                     1, 2,     // input channels: mono mic up to stereo
+                     0, 0,     // no outputs on the mic-side manager
+                     false, false,
+                     true, false),
+      outputSelector (engineToUse.outputDeviceManager,
+                      0, 0,     // no inputs on the cable-side manager
+                      2, 2,     // the cable is stereo
                       false, false,
                       true, false)
 {
@@ -57,15 +62,18 @@ MainComponent::MainComponent (AudioEngine& engineToUse)
     };
 
     chainHeading.setText ("Plugin chain (mic -> top to bottom -> cable)", juce::dontSendNotification);
-    deviceHeading.setText ("Audio devices (input = your mic, output = CABLE Input)", juce::dontSendNotification);
+    inputHeading.setText ("Input device (your mic)", juce::dontSendNotification);
+    outputHeading.setText ("Output device (CABLE Input)", juce::dontSendNotification);
 
-    for (auto* label : { &chainHeading, &deviceHeading })
+    for (auto* label : { &chainHeading, &inputHeading, &outputHeading })
         label->setFont (juce::Font (juce::FontOptions (15.0f)));
 
     addAndMakeVisible (chainHeading);
-    addAndMakeVisible (deviceHeading);
+    addAndMakeVisible (inputHeading);
+    addAndMakeVisible (outputHeading);
     addAndMakeVisible (chainList);
-    addAndMakeVisible (deviceSelector);
+    addAndMakeVisible (inputSelector);
+    addAndMakeVisible (outputSelector);
     addAndMakeVisible (autostartToggle);
     addAndMakeVisible (statusLabel);
     addAndMakeVisible (warningLabel);
@@ -127,9 +135,10 @@ MainComponent::MainComponent (AudioEngine& engineToUse)
     startTimerHz (2);
     setSize (900, 600);
 
-    // Any click inside the device selector marks the next device change as
+    // Any click inside a device selector marks the next device change as
     // user-chosen (the watchdog must never adopt a fallback as intent).
-    deviceSelector.addMouseListener (this, true);
+    inputSelector.addMouseListener (this, true);
+    outputSelector.addMouseListener (this, true);
 }
 
 MainComponent::~MainComponent()
@@ -151,8 +160,9 @@ void MainComponent::paint (juce::Graphics& g)
 
 void MainComponent::mouseDown (const juce::MouseEvent& event)
 {
-    if (event.eventComponent == &deviceSelector || deviceSelector.isParentOf (event.eventComponent))
-        engine.noteUserDeviceInteraction();
+    for (auto* selector : { &inputSelector, &outputSelector })
+        if (event.eventComponent == selector || selector->isParentOf (event.eventComponent))
+            engine.noteUserDeviceInteraction();
 }
 
 void MainComponent::resized()
@@ -182,8 +192,10 @@ void MainComponent::resized()
 
     chainList.setBounds (left.reduced (2, 4));
 
-    deviceHeading.setBounds (area.removeFromTop (24));
-    deviceSelector.setBounds (area.reduced (2, 4));
+    inputHeading.setBounds (area.removeFromTop (24));
+    inputSelector.setBounds (area.removeFromTop (area.getHeight() / 2 - 24).reduced (2, 4));
+    outputHeading.setBounds (area.removeFromTop (24));
+    outputSelector.setBounds (area.reduced (2, 4));
 }
 
 //==============================================================================
@@ -230,35 +242,53 @@ void MainComponent::selectedRowsChanged (int)
 void MainComponent::timerCallback()
 {
     juce::String status, warning;
-    double rate = 0.0;
+    double inRate = 0.0, outRate = 0.0;
 
-    if (auto* device = engine.deviceManager.getCurrentAudioDevice())
+    auto* inputDevice  = engine.inputDeviceManager.getCurrentAudioDevice();
+    auto* outputDevice = engine.outputDeviceManager.getCurrentAudioDevice();
+
+    if (inputDevice != nullptr)
+        inRate = inputDevice->getCurrentSampleRate();
+
+    if (outputDevice != nullptr)
+        outRate = outputDevice->getCurrentSampleRate();
+
+    if (inputDevice == nullptr || outputDevice == nullptr)
     {
-        rate = device->getCurrentSampleRate();
-        auto buffer = device->getCurrentBufferSizeSamples();
-        auto pluginLatency = engine.getTotalPluginLatencySamples();
-
-        if (rate > 0.0)
-            status << juce::String (rate / 1000.0, 1) << " kHz, "
-                   << buffer << " samples ("
-                   << juce::String (buffer * 1000.0 / rate, 1) << " ms buffer)"
-                   << "   |   plugin latency " << juce::String (pluginLatency * 1000.0 / rate, 1) << " ms"
-                   << "   |   CPU " << juce::String (engine.deviceManager.getCpuUsage() * 100.0, 1) << "%"
-                   << "   |   xruns " << juce::jmax (0, engine.deviceManager.getXRunCount())
-                   << " (total " << engine.getCumulativeXRuns() << ")";
-        else
-            status = "Audio device is reporting an invalid sample rate - reopening...";
+        status = juce::String (inputDevice == nullptr ? "No input device" : "No output device")
+               + " open - pick devices on the right.";
+    }
+    else if (outRate <= 0.0)
+    {
+        status = "Output device is reporting an invalid sample rate - reopening...";
     }
     else
     {
-        status = "No audio device open - pick devices on the right.";
+        auto buffer = outputDevice->getCurrentBufferSizeSamples();
+        auto pluginLatency = engine.getTotalPluginLatencySamples();
+        auto& bridge = engine.getBridge();
+
+        status << juce::String (outRate / 1000.0, 1) << " kHz, "
+               << buffer << " samples ("
+               << juce::String (buffer * 1000.0 / outRate, 1) << " ms buffer)"
+               << "   |   latency: bridge " << juce::String (bridge.getBridgeLatencySamples() * 1000.0 / outRate, 1)
+               << " ms + plugins " << juce::String (pluginLatency * 1000.0 / outRate, 1) << " ms"
+               << "   |   CPU " << juce::String (engine.outputDeviceManager.getCpuUsage() * 100.0, 1) << "%"
+               << "   |   xruns " << engine.getCumulativeXRuns();
+
+        if (bridge.isRunning())
+            status << "   |   fill " << bridge.getRingFill() << "/" << bridge.getRingTarget()
+                   << ", drift " << juce::String (bridge.getCorrectionPpm(), 1) << " ppm"
+                   << ", under/over " << bridge.getUnderruns() << "/" << bridge.getOverruns();
     }
 
     if (engine.inputLooksLikeVirtualCable())
         warning = "Warning: the selected INPUT is a virtual-cable endpoint - that loops the cable "
                   "into itself. Select your real microphone instead.";
-    else if (rate > 0.0 && ! juce::exactlyEqual (rate, 48000.0))
-        warning = "Warning: running at " + juce::String (rate / 1000.0, 1)
+    else if ((inRate > 0.0 && ! juce::exactlyEqual (inRate, 48000.0))
+             || (outRate > 0.0 && ! juce::exactlyEqual (outRate, 48000.0)))
+        warning = "Warning: running at " + juce::String (inRate / 1000.0, 1) + "/"
+                + juce::String (outRate / 1000.0, 1)
                 + " kHz - pin your mic and both CABLE endpoints to 48 kHz in mmsys.cpl "
                   "to avoid hidden resampling (see README).";
 

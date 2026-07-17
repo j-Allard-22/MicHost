@@ -38,9 +38,9 @@ private:
     juce::TextButton addButton { "Add..." }, removeButton { "Remove" },
                      upButton { "Move Up" }, downButton { "Move Down" },
                      editorButton { "Open Editor" }, managerButton { "Manage Plugins..." };
-    juce::AudioDeviceSelectorComponent deviceSelector;
+    juce::AudioDeviceSelectorComponent inputSelector, outputSelector;
     juce::ToggleButton autostartToggle { "Start with Windows (minimised to tray)" };
-    juce::Label chainHeading, deviceHeading, statusLabel, warningLabel;
+    juce::Label chainHeading, inputHeading, outputHeading, statusLabel, warningLabel;
 
     juce::OwnedArray<PluginWindow> editorWindows;
     juce::Component::SafePointer<juce::DialogWindow> pluginManagerDialog;
