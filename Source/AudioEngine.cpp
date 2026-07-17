@@ -107,6 +107,7 @@ void AudioEngine::initialise()
 
     rebuildConnections();
     logCurrentDeviceState ("Engine initialised");
+    updateHealth(); // the tray icon reads health right after construction
     startTimer (1000);
 }
 
@@ -138,11 +139,16 @@ void AudioEngine::changeListenerCallback (juce::ChangeBroadcaster* source)
         logCurrentDeviceState (side.isInput ? "Input device change" : "Output device change");
 
         // Adopt as the new desired device only when the change is
-        // user-attributable: shortly after they touched a selector, never
-        // while the watchdog itself is reconciling.
-        if (! reconciling
-            && side.manager->getCurrentAudioDevice() != nullptr
-            && juce::Time::getMillisecondCounter() - lastUserInteractionMs < 10000)
+        // user-attributable: a recent click in a selector or keyboard focus
+        // inside one right now - and never shortly after a watchdog action
+        // (its own change messages arrive asynchronously).
+        auto now = juce::Time::getMillisecondCounter();
+        auto userAttributable = (now - lastUserInteractionMs < 10000)
+                             || (selectorHasFocus != nullptr && selectorHasFocus());
+
+        if (userAttributable
+            && now - lastWatchdogActionMs > 2000
+            && side.manager->getCurrentAudioDevice() != nullptr)
         {
             adoptSideAsDesired (side, "user selection");
         }
@@ -235,32 +241,26 @@ void AudioEngine::adoptSideAsDesired (WatchedSide& side, const juce::String& rea
 
 void AudioEngine::runDeviceWatchdog()
 {
+    // A side with no desired name yet (true first run, until the user picks)
+    // has no intent to defend - the watchdog stays inert for it.
     for (auto* side : { &inputSide, &outputSide })
-    {
-        // Nothing chosen yet (true first run): once the user can see the
-        // window and a device is open, treat that setup as chosen.
-        if (side->desired.isEmpty())
-        {
-            if (side->manager->getCurrentAudioDevice() != nullptr
-                && isUserInteracting != nullptr && isUserInteracting())
-                adoptSideAsDesired (*side, "first run");
-
-            continue;
-        }
-
-        reconcileSide (*side);
-    }
+        if (side->desired.isNotEmpty())
+            reconcileSide (*side);
 }
 
 void AudioEngine::reconcileSide (WatchedSide& side)
 {
+    auto* device = side.manager->getCurrentAudioDevice();
     auto setup = side.manager->getAudioDeviceSetup();
     auto current = side.isInput ? setup.inputDeviceName : setup.outputDeviceName;
-    auto onDesired = side.manager->getCurrentAudioDevice() != nullptr && current == side.desired;
 
-    if (onDesired)
+    // "Usable" excludes an open-but-dead device reporting a zero rate.
+    auto usable = device != nullptr && device->getCurrentSampleRate() > 0.0;
+
+    if (usable && current == side.desired)
     {
         side.backoffSeconds = 5;
+        side.nextReconcileTick = 0; // a fresh failure episode retries immediately
         side.loggedWaiting = false;
         return;
     }
@@ -279,6 +279,18 @@ void AudioEngine::reconcileSide (WatchedSide& side)
 
     if (! type->getDeviceNames (side.isInput).contains (side.desired))
     {
+        // The desired device is gone. If JUCE's own device-loss handling fell
+        // back to something else, close it: capturing a mic the user never
+        // chose (or blasting the chain out of their speakers) is worse than
+        // honest silence and a red tray.
+        if (device != nullptr)
+        {
+            michost::log ("Watchdog: closing non-desired " + juce::String (side.isInput ? "input" : "output")
+                          + " \"" + current + "\" while waiting for \"" + side.desired + "\"");
+            lastWatchdogActionMs = juce::Time::getMillisecondCounter();
+            side.manager->closeAudioDevice();
+        }
+
         if (! side.loggedWaiting)
         {
             michost::log ("Watchdog: waiting for " + juce::String (side.isInput ? "input" : "output")
@@ -299,9 +311,8 @@ void AudioEngine::reconcileSide (WatchedSide& side)
     michost::log ("Watchdog: reopening " + juce::String (side.isInput ? "input" : "output")
                   + " \"" + side.desired + "\"");
 
-    reconciling = true;
+    lastWatchdogActionMs = juce::Time::getMillisecondCounter();
     auto error = side.manager->setAudioDeviceSetup (want, true);
-    reconciling = false;
 
     if (error.isNotEmpty())
         michost::log ("Watchdog: reopen failed: " + error);

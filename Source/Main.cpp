@@ -161,6 +161,15 @@ public:
 
         scannerSubprocess = nullptr;
 
+        // A worker whose pipe never connected must not fall through and boot
+        // a second full tray instance (it bypasses the single-instance gate).
+        if (commandLine.contains ("--" + juce::String (scannerProcessUID) + ":"))
+        {
+            setApplicationReturnValue (1);
+            quit();
+            return;
+        }
+
         if (commandLine.contains ("--list-devices"))
         {
             listDevicesAndQuit();
@@ -190,15 +199,10 @@ public:
 
         mainWindow = std::make_unique<MainWindow> (getApplicationName(), *engine, ! startMinimised);
         trayIcon = std::make_unique<TrayIcon> (*mainWindow, *engine);
-
-        engine->isUserInteracting = [this] { return mainWindow != nullptr && mainWindow->isVisible(); };
     }
 
     void shutdown() override
     {
-        if (engine != nullptr)
-            engine->isUserInteracting = nullptr; // engine's timer must not touch the dying window
-
         trayIcon.reset();
         mainWindow.reset();          // closes plugin editor windows before the graph dies
 

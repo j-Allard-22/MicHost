@@ -76,8 +76,10 @@ public:
     // with any other cause (login race, unplug, fallback) never are.
     void noteUserDeviceInteraction() noexcept { lastUserInteractionMs = juce::Time::getMillisecondCounter(); }
 
-    // Supplied by the app shell: true while the main window is visible.
-    std::function<bool()> isUserInteracting;
+    // Supplied by the UI: true while keyboard focus is inside a device
+    // selector. Covers keyboard-driven and slow dropdown selections that the
+    // mouse-timestamp window would miss.
+    std::function<bool()> selectorHasFocus;
 
     void saveState();
     juce::File getDeadMansPedalFile() const;
@@ -132,7 +134,11 @@ private:
     WatchedSide inputSide  { &inputDeviceManager,  "desiredInputDevice",  {}, true };
     WatchedSide outputSide { &outputDeviceManager, "desiredOutputDevice", {}, false };
     juce::uint32 lastUserInteractionMs = 0;
-    bool reconciling = false;
+
+    // Change messages arrive asynchronously, so a bool guard around the
+    // watchdog's own setAudioDeviceSetup call would always be false again by
+    // delivery time; suppress adoption by timestamp instead.
+    juce::uint32 lastWatchdogActionMs = 0;
 
     Health health = Health::noDevice;
     juce::String healthText;

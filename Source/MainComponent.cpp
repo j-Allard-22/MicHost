@@ -135,16 +135,27 @@ MainComponent::MainComponent (AudioEngine& engineToUse)
     startTimerHz (2);
     setSize (900, 600);
 
-    // Any click inside a device selector marks the next device change as
-    // user-chosen (the watchdog must never adopt a fallback as intent).
+    // A click inside a device selector (or keyboard focus inside one, for
+    // keyboard-driven and slow dropdown picks) marks the next device change
+    // as user-chosen; the watchdog must never adopt a fallback as intent.
     inputSelector.addMouseListener (this, true);
     outputSelector.addMouseListener (this, true);
+
+    engine.selectorHasFocus = [this]
+    {
+        auto* focused = juce::Component::getCurrentlyFocusedComponent();
+
+        return focused != nullptr
+            && (focused == &inputSelector  || inputSelector.isParentOf (focused)
+             || focused == &outputSelector || outputSelector.isParentOf (focused));
+    };
 }
 
 MainComponent::~MainComponent()
 {
     engine.onChainChanged = nullptr;
     engine.onPluginRemoved = nullptr;
+    engine.selectorHasFocus = nullptr;
 
     // The Manage Plugins dialog references the engine's format manager and
     // plugin list; it must die before the engine does (MainWindow is destroyed
