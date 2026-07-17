@@ -16,11 +16,12 @@
 class MainWindow : public juce::DocumentWindow
 {
 public:
-    MainWindow (const juce::String& name, AudioEngine& engine, bool startVisible)
+    MainWindow (const juce::String& name, AudioEngine& engineToUse, bool startVisible)
         : DocumentWindow (name,
                           juce::Desktop::getInstance().getDefaultLookAndFeel()
                               .findColour (juce::ResizableWindow::backgroundColourId),
-                          DocumentWindow::allButtons)
+                          DocumentWindow::allButtons),
+          engine (engineToUse)
     {
         setUsingNativeTitleBar (true);
         setContentOwned (new MainComponent (engine), true);
@@ -34,12 +35,16 @@ public:
     }
 
     // Hide to tray instead of quitting; the tray menu owns the real quit.
+    // Hiding is also a natural flush point for any pending plugin tweaks.
     void closeButtonPressed() override
     {
         setVisible (false);
+        engine.saveState();
     }
 
 private:
+    AudioEngine& engine;
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainWindow)
 };
 
@@ -113,6 +118,12 @@ public:
             return;
         }
 
+        fileLogger.reset (juce::FileLogger::createDefaultAppLogger (
+            "MicHost", "MicHost.log",
+            "MicHost " + getApplicationVersion() + " starting", 128 * 1024));
+        juce::Logger::setCurrentLogger (fileLogger.get());
+        michost::log ("Launched (command line: \"" + commandLine + "\")");
+
         juce::PropertiesFile::Options options;
         options.applicationName = "MicHost";
         options.filenameSuffix = ".settings";
@@ -142,6 +153,13 @@ public:
 
         engine.reset();
         appProperties.closeFiles();
+
+        if (fileLogger != nullptr)
+        {
+            michost::log ("Shut down cleanly");
+            juce::Logger::setCurrentLogger (nullptr);
+            fileLogger.reset();
+        }
     }
 
     void systemRequestedQuit() override
@@ -149,8 +167,14 @@ public:
         quit();
     }
 
-    void anotherInstanceStarted (const juce::String&) override
+    void anotherInstanceStarted (const juce::String& commandLine) override
     {
+        michost::log ("Another instance started (\"" + commandLine + "\")");
+
+        // A duplicate autostart launch must not pop the hidden window.
+        if (commandLine.contains ("--minimized") || commandLine.contains ("--minimised"))
+            return;
+
         if (mainWindow != nullptr)
         {
             mainWindow->setVisible (true);
@@ -211,6 +235,7 @@ private:
     }
 
     juce::ApplicationProperties appProperties;
+    std::unique_ptr<juce::FileLogger> fileLogger;
     std::unique_ptr<AudioEngine> engine;
     std::unique_ptr<MainWindow> mainWindow;
     std::unique_ptr<TrayIcon> trayIcon;

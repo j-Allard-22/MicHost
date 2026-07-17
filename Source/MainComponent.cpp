@@ -219,33 +219,41 @@ void MainComponent::selectedRowsChanged (int)
 //==============================================================================
 void MainComponent::timerCallback()
 {
-    juce::String status;
+    juce::String status, warning;
+    double rate = 0.0;
 
     if (auto* device = engine.deviceManager.getCurrentAudioDevice())
     {
-        auto rate = device->getCurrentSampleRate();
+        rate = device->getCurrentSampleRate();
         auto buffer = device->getCurrentBufferSizeSamples();
         auto pluginLatency = engine.getTotalPluginLatencySamples();
 
-        status << juce::String (rate / 1000.0, 1) << " kHz, "
-               << buffer << " samples ("
-               << juce::String (buffer * 1000.0 / rate, 1) << " ms buffer)"
-               << "   |   plugin latency " << juce::String (pluginLatency * 1000.0 / rate, 1) << " ms"
-               << "   |   CPU " << juce::String (engine.deviceManager.getCpuUsage() * 100.0, 1) << "%"
-               << "   |   xruns " << engine.deviceManager.getXRunCount();
+        if (rate > 0.0)
+            status << juce::String (rate / 1000.0, 1) << " kHz, "
+                   << buffer << " samples ("
+                   << juce::String (buffer * 1000.0 / rate, 1) << " ms buffer)"
+                   << "   |   plugin latency " << juce::String (pluginLatency * 1000.0 / rate, 1) << " ms"
+                   << "   |   CPU " << juce::String (engine.deviceManager.getCpuUsage() * 100.0, 1) << "%"
+                   << "   |   xruns " << juce::jmax (0, engine.deviceManager.getXRunCount())
+                   << " (total " << engine.getCumulativeXRuns() << ")";
+        else
+            status = "Audio device is reporting an invalid sample rate - reopening...";
     }
     else
     {
         status = "No audio device open - pick devices on the right.";
     }
 
-    statusLabel.setText (status, juce::dontSendNotification);
+    if (engine.inputLooksLikeVirtualCable())
+        warning = "Warning: the selected INPUT is a virtual-cable endpoint - that loops the cable "
+                  "into itself. Select your real microphone instead.";
+    else if (rate > 0.0 && ! juce::exactlyEqual (rate, 48000.0))
+        warning = "Warning: running at " + juce::String (rate / 1000.0, 1)
+                + " kHz - pin your mic and both CABLE endpoints to 48 kHz in mmsys.cpl "
+                  "to avoid hidden resampling (see README).";
 
-    warningLabel.setText (engine.inputLooksLikeVirtualCable()
-                            ? "Warning: the selected INPUT is a virtual-cable endpoint - that loops the cable "
-                              "into itself. Select your real microphone instead."
-                            : juce::String(),
-                          juce::dontSendNotification);
+    statusLabel.setText (status, juce::dontSendNotification);
+    warningLabel.setText (warning, juce::dontSendNotification);
 }
 
 //==============================================================================

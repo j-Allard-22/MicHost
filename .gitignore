@@ -7,6 +7,9 @@ external/JUCE/
 # VST2 SDK headers: legally EOL, personal use only — never commit or redistribute
 sdks/
 
+# Diagnostic output from `MicHost.exe --list-devices`
+MicHost-devices.txt
+
 # Editor/OS noise
 .vs/
 *.user

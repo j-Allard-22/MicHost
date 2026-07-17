@@ -2,11 +2,23 @@
 
 #include <JuceHeader.h>
 
+namespace michost
+{
+    // All diagnostic lines carry a wall-clock stamp so soak-test logs can be
+    // correlated with what the user heard (FileLogger itself doesn't stamp).
+    inline void log (const juce::String& message)
+    {
+        juce::Logger::writeToLog (juce::Time::getCurrentTime()
+                                      .formatted ("%Y-%m-%d %H:%M:%S ") + message);
+    }
+}
+
 // Owns the audio device, the processor graph (mic in -> serial plugin chain ->
 // cable out) and chain persistence. All chain mutations must happen on the
 // message thread; AudioProcessorGraph makes topology changes safe against the
 // running audio thread.
-class AudioEngine : private juce::ChangeListener
+class AudioEngine : private juce::ChangeListener,
+                    private juce::Timer
 {
 public:
     explicit AudioEngine (juce::PropertiesFile& propertiesFile);
@@ -36,6 +48,10 @@ public:
     int getTotalPluginLatencySamples() const;
     double getCurrentSampleRate() const;
 
+    // Total xruns across device reopens (the raw device counter resets to zero
+    // every time the device restarts, which makes it useless for soak tests).
+    int getCumulativeXRuns() const noexcept { return cumulativeXRuns; }
+
     // True when the selected input device looks like a virtual-cable endpoint,
     // which would feed the cable back into itself.
     bool inputLooksLikeVirtualCable() const;
@@ -56,6 +72,8 @@ private:
     };
 
     void changeListenerCallback (juce::ChangeBroadcaster* source) override;
+    void timerCallback() override;
+    void logCurrentDeviceState (const juce::String& context) const;
     void rebuildConnections();
     void restoreChain();
     void saveChain();
@@ -68,6 +86,8 @@ private:
     juce::AudioProcessorGraph::NodeID inputNodeID, outputNodeID;
     std::vector<Slot> chain;
     bool hasShutDown = false;
+
+    int lastSeenXRuns = 0, cumulativeXRuns = 0, timerTicks = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AudioEngine)
 };

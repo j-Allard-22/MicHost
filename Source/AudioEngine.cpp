@@ -43,6 +43,8 @@ void AudioEngine::initialise()
     deviceManager.addAudioCallback (&player);
 
     rebuildConnections();
+    logCurrentDeviceState ("Engine initialised");
+    startTimer (1000);
 }
 
 void AudioEngine::shutdown()
@@ -52,6 +54,7 @@ void AudioEngine::shutdown()
 
     hasShutDown = true;
 
+    stopTimer();
     saveState();
     deviceManager.removeChangeListener (this);
     knownPlugins.removeChangeListener (this);
@@ -67,11 +70,56 @@ void AudioEngine::changeListenerCallback (juce::ChangeBroadcaster* source)
     {
         // Channel counts may have changed (e.g. mono mic -> stereo device).
         rebuildConnections();
+        logCurrentDeviceState ("Device change");
     }
     else if (source == &knownPlugins)
     {
         if (auto xml = knownPlugins.createXml())
             props.setValue ("pluginList", xml.get());
+    }
+}
+
+void AudioEngine::timerCallback()
+{
+    ++timerTicks;
+
+    // The device counter resets to zero whenever the device reopens; fold it
+    // into a monotonic total so soak tests survive unplug/sleep cycles.
+    auto current = juce::jmax (0, deviceManager.getXRunCount());
+
+    if (current < lastSeenXRuns)
+        lastSeenXRuns = 0;
+
+    if (current > lastSeenXRuns)
+    {
+        auto delta = current - lastSeenXRuns;
+        cumulativeXRuns += delta;
+        lastSeenXRuns = current;
+        michost::log ("XRuns: +" + juce::String (delta)
+                      + " device=" + juce::String (current)
+                      + " cumulative=" + juce::String (cumulativeXRuns));
+    }
+
+    // Periodic save bounds what a power cut or Task Manager kill can lose:
+    // plugin parameter tweaks are only captured by getStateInformation here
+    // or at clean shutdown.
+    if (timerTicks % 300 == 0)
+        saveState();
+}
+
+void AudioEngine::logCurrentDeviceState (const juce::String& context) const
+{
+    if (auto* device = deviceManager.getCurrentAudioDevice())
+    {
+        auto setup = deviceManager.getAudioDeviceSetup();
+        michost::log (context + ": input=\"" + setup.inputDeviceName
+                      + "\" output=\"" + setup.outputDeviceName
+                      + "\" rate=" + juce::String (device->getCurrentSampleRate(), 0)
+                      + " buffer=" + juce::String (device->getCurrentBufferSizeSamples()));
+    }
+    else
+    {
+        michost::log (context + ": no audio device open");
     }
 }
 
@@ -240,9 +288,13 @@ bool AudioEngine::inputLooksLikeVirtualCable() const
 {
     auto name = deviceManager.getAudioDeviceSetup().inputDeviceName;
 
-    return name.containsIgnoreCase ("CABLE Output")
+    // Broad on purpose: capturing from any virtual-cable endpoint while we
+    // render into one is a feedback loop. NVIDIA Broadcast's virtual mic is a
+    // legitimate input and matches none of these.
+    return name.containsIgnoreCase ("CABLE")               // VB-Cable, CABLE-A/B, 16ch
         || name.containsIgnoreCase ("VB-Audio")
-        || name.containsIgnoreCase ("Voicemeeter Out");
+        || name.containsIgnoreCase ("Voicemeeter")
+        || name.containsIgnoreCase ("Virtual Audio Cable"); // VAC "Line 1 (Virtual Audio Cable)"
 }
 
 void AudioEngine::saveChain()
