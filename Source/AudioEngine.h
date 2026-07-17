@@ -52,6 +52,20 @@ public:
     // every time the device restarts, which makes it useless for soak tests).
     int getCumulativeXRuns() const noexcept { return cumulativeXRuns; }
 
+    // At-a-glance state for the tray icon. "degraded" = running but on the
+    // wrong device, at the wrong rate, or capturing from a virtual cable.
+    enum class Health { ok, degraded, noDevice };
+    Health getHealth() const noexcept { return health; }
+    juce::String getHealthText() const { return healthText; }
+
+    // Called by the UI when the user touches the device selector; device-setup
+    // changes shortly after are adopted as the new *desired* devices. Changes
+    // with any other cause (login race, unplug, fallback) never are.
+    void noteUserDeviceInteraction() noexcept { lastUserInteractionMs = juce::Time::getMillisecondCounter(); }
+
+    // Supplied by the app shell: true while the main window is visible.
+    std::function<bool()> isUserInteracting;
+
     // True when the selected input device looks like a virtual-cable endpoint,
     // which would feed the cable back into itself.
     bool inputLooksLikeVirtualCable() const;
@@ -74,6 +88,9 @@ private:
     void changeListenerCallback (juce::ChangeBroadcaster* source) override;
     void timerCallback() override;
     void logCurrentDeviceState (const juce::String& context) const;
+    void adoptCurrentSetupAsDesired (const juce::String& reason);
+    void runDeviceWatchdog();
+    void updateHealth();
     void rebuildConnections();
     void restoreChain();
     void saveChain();
@@ -88,6 +105,18 @@ private:
     bool hasShutDown = false;
 
     int lastSeenXRuns = 0, cumulativeXRuns = 0, timerTicks = 0;
+
+    // Watchdog state: the devices the user actually chose. The manager may
+    // drift off them (login race, unplug, WASAPI session expiry) and is
+    // steered back whenever they reappear.
+    juce::String desiredInput, desiredOutput;
+    juce::uint32 lastUserInteractionMs = 0;
+    bool reconciling = false;
+    int nextReconcileTick = 0, reconcileBackoffSeconds = 5;
+    bool loggedWaitingForDevice = false;
+
+    Health health = Health::noDevice;
+    juce::String healthText;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AudioEngine)
 };

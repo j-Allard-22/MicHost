@@ -49,25 +49,15 @@ private:
 };
 
 //==============================================================================
-class TrayIcon : public juce::SystemTrayIconComponent
+class TrayIcon : public juce::SystemTrayIconComponent,
+                 private juce::Timer
 {
 public:
-    explicit TrayIcon (juce::DocumentWindow& windowToControl)
-        : window (windowToControl)
+    TrayIcon (juce::DocumentWindow& windowToControl, AudioEngine& engineToUse)
+        : window (windowToControl), engine (engineToUse)
     {
-        juce::Image icon (juce::Image::ARGB, 64, 64, true);
-
-        {
-            juce::Graphics g (icon);
-            g.setColour (juce::Colours::mediumseagreen);
-            g.fillEllipse (4.0f, 4.0f, 56.0f, 56.0f);
-            g.setColour (juce::Colours::black);
-            g.setFont (juce::Font (juce::FontOptions (40.0f)));
-            g.drawText ("M", icon.getBounds(), juce::Justification::centred);
-        }
-
-        setIconImage (icon, icon);
-        setIconTooltip ("MicHost");
+        refresh (true);
+        startTimer (1000);
     }
 
     void mouseDown (const juce::MouseEvent& event) override
@@ -87,6 +77,47 @@ public:
     }
 
 private:
+    void timerCallback() override
+    {
+        refresh (false);
+    }
+
+    // The tray is the only always-visible surface, so it carries the health
+    // signal: green = processing on the chosen devices, amber = running but
+    // wrong device/rate/feedback, red = no device open.
+    void refresh (bool force)
+    {
+        auto health = engine.getHealth();
+        auto tooltip = engine.getHealthText();
+
+        if (force || health != lastHealth)
+        {
+            auto colour = health == AudioEngine::Health::ok       ? juce::Colours::mediumseagreen
+                        : health == AudioEngine::Health::degraded ? juce::Colours::orange
+                                                                  : juce::Colours::indianred;
+
+            juce::Image icon (juce::Image::ARGB, 64, 64, true);
+
+            {
+                juce::Graphics g (icon);
+                g.setColour (colour);
+                g.fillEllipse (4.0f, 4.0f, 56.0f, 56.0f);
+                g.setColour (juce::Colours::black);
+                g.setFont (juce::Font (juce::FontOptions (40.0f)));
+                g.drawText ("M", icon.getBounds(), juce::Justification::centred);
+            }
+
+            setIconImage (icon, icon);
+            lastHealth = health;
+        }
+
+        if (force || tooltip != lastTooltip)
+        {
+            setIconTooltip (tooltip.substring (0, 120)); // Windows tray tooltip limit
+            lastTooltip = tooltip;
+        }
+    }
+
     void showWindow()
     {
         window.setVisible (true);
@@ -94,6 +125,9 @@ private:
     }
 
     juce::DocumentWindow& window;
+    AudioEngine& engine;
+    AudioEngine::Health lastHealth = AudioEngine::Health::noDevice;
+    juce::String lastTooltip;
 };
 
 //==============================================================================
@@ -140,11 +174,16 @@ public:
                            || commandLine.contains ("--minimised");
 
         mainWindow = std::make_unique<MainWindow> (getApplicationName(), *engine, ! startMinimised);
-        trayIcon = std::make_unique<TrayIcon> (*mainWindow);
+        trayIcon = std::make_unique<TrayIcon> (*mainWindow, *engine);
+
+        engine->isUserInteracting = [this] { return mainWindow != nullptr && mainWindow->isVisible(); };
     }
 
     void shutdown() override
     {
+        if (engine != nullptr)
+            engine->isUserInteracting = nullptr; // engine's timer must not touch the dying window
+
         trayIcon.reset();
         mainWindow.reset();          // closes plugin editor windows before the graph dies
 

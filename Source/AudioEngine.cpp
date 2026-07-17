@@ -25,8 +25,27 @@ void AudioEngine::initialise()
 
     restoreChain();
 
+    desiredInput  = props.getValue ("desiredInputDevice");
+    desiredOutput = props.getValue ("desiredOutputDevice");
+
     auto savedDevice = props.getXmlValue ("audioDeviceState");
-    deviceManager.initialise (2, 2, savedDevice.get(), true);
+
+    // Upgrade path: adopt the previously saved device names as the desired
+    // ones so the watchdog can defend them from now on.
+    if (savedDevice != nullptr && desiredInput.isEmpty() && desiredOutput.isEmpty())
+    {
+        desiredInput  = savedDevice->getStringAttribute ("audioInputDeviceName");
+        desiredOutput = savedDevice->getStringAttribute ("audioOutputDeviceName");
+        props.setValue ("desiredInputDevice", desiredInput);
+        props.setValue ("desiredOutputDevice", desiredOutput);
+    }
+
+    // Never silently fall back to default devices once the user has chosen:
+    // at login the saved (USB) mic may not have enumerated yet, and "default"
+    // would render the processed mic into the speakers while Discord reads
+    // silence from the cable. No device + a red tray is the honest failure
+    // mode; the watchdog reopens the right device the moment it appears.
+    deviceManager.initialise (2, 2, savedDevice.get(), /*selectDefaultDeviceOnFailure*/ savedDevice == nullptr);
 
     // Prefer 48 kHz on first run: the GoXLR runs at a fixed 48 kHz, and matching
     // rates end-to-end avoids hidden shared-mode resampling in the pipe.
@@ -71,6 +90,16 @@ void AudioEngine::changeListenerCallback (juce::ChangeBroadcaster* source)
         // Channel counts may have changed (e.g. mono mic -> stereo device).
         rebuildConnections();
         logCurrentDeviceState ("Device change");
+
+        // Adopt as the new desired devices only when the change is
+        // user-attributable: shortly after they touched the selector, never
+        // while the watchdog itself is reconciling.
+        if (! reconciling
+            && deviceManager.getCurrentAudioDevice() != nullptr
+            && juce::Time::getMillisecondCounter() - lastUserInteractionMs < 10000)
+        {
+            adoptCurrentSetupAsDesired ("user selection");
+        }
     }
     else if (source == &knownPlugins)
     {
@@ -105,6 +134,151 @@ void AudioEngine::timerCallback()
     // or at clean shutdown.
     if (timerTicks % 300 == 0)
         saveState();
+
+    runDeviceWatchdog();
+    updateHealth();
+}
+
+void AudioEngine::adoptCurrentSetupAsDesired (const juce::String& reason)
+{
+    auto setup = deviceManager.getAudioDeviceSetup();
+
+    if (setup.inputDeviceName == desiredInput && setup.outputDeviceName == desiredOutput)
+        return;
+
+    desiredInput  = setup.inputDeviceName;
+    desiredOutput = setup.outputDeviceName;
+    props.setValue ("desiredInputDevice", desiredInput);
+    props.setValue ("desiredOutputDevice", desiredOutput);
+    michost::log ("Desired devices now input=\"" + desiredInput
+                  + "\" output=\"" + desiredOutput + "\" (" + reason + ")");
+}
+
+void AudioEngine::runDeviceWatchdog()
+{
+    // Nothing chosen yet (true first run): once the user can see the window
+    // and a device is open, treat that setup as chosen.
+    if (desiredInput.isEmpty() && desiredOutput.isEmpty())
+    {
+        if (deviceManager.getCurrentAudioDevice() != nullptr
+            && isUserInteracting != nullptr && isUserInteracting())
+            adoptCurrentSetupAsDesired ("first run");
+
+        return;
+    }
+
+    auto setup = deviceManager.getAudioDeviceSetup();
+    auto onDesired = deviceManager.getCurrentAudioDevice() != nullptr
+                  && (desiredInput.isEmpty()  || setup.inputDeviceName  == desiredInput)
+                  && (desiredOutput.isEmpty() || setup.outputDeviceName == desiredOutput);
+
+    if (onDesired)
+    {
+        reconcileBackoffSeconds = 5;
+        loggedWaitingForDevice = false;
+        return;
+    }
+
+    if (timerTicks < nextReconcileTick)
+        return;
+
+    nextReconcileTick = timerTicks + reconcileBackoffSeconds;
+    reconcileBackoffSeconds = juce::jmin (15, reconcileBackoffSeconds + 5);
+
+    auto* type = deviceManager.getCurrentDeviceTypeObject();
+    if (type == nullptr)
+        return;
+
+    type->scanForDevices();
+
+    auto inputPresent  = desiredInput.isEmpty()  || type->getDeviceNames (true).contains (desiredInput);
+    auto outputPresent = desiredOutput.isEmpty() || type->getDeviceNames (false).contains (desiredOutput);
+
+    if (! inputPresent || ! outputPresent)
+    {
+        if (! loggedWaitingForDevice)
+        {
+            michost::log ("Watchdog: waiting for "
+                          + juce::String (! inputPresent ? "input \"" + desiredInput + "\" " : "")
+                          + juce::String (! outputPresent ? "output \"" + desiredOutput + "\"" : "")
+                          + "to appear");
+            loggedWaitingForDevice = true;
+        }
+        return;
+    }
+
+    auto want = setup;
+    want.inputDeviceName  = desiredInput;
+    want.outputDeviceName = desiredOutput;
+    want.useDefaultInputChannels  = true;
+    want.useDefaultOutputChannels = true;
+    want.sampleRate = 48000.0;
+    want.bufferSize = 0; // device default
+
+    michost::log ("Watchdog: reopening input=\"" + desiredInput + "\" output=\"" + desiredOutput + "\"");
+
+    reconciling = true;
+    auto error = deviceManager.setAudioDeviceSetup (want, true);
+    reconciling = false;
+
+    if (error.isNotEmpty())
+        michost::log ("Watchdog: reopen failed: " + error);
+    else
+    {
+        michost::log ("Watchdog: reopen succeeded");
+        reconcileBackoffSeconds = 5;
+        loggedWaitingForDevice = false;
+    }
+}
+
+void AudioEngine::updateHealth()
+{
+    auto previous = health;
+    juce::String text;
+
+    if (deviceManager.getCurrentAudioDevice() == nullptr)
+    {
+        health = Health::noDevice;
+        text = desiredInput.isNotEmpty()
+                 ? "No audio device - waiting for \"" + desiredInput + "\""
+                 : "No audio device - open MicHost and pick devices";
+    }
+    else
+    {
+        auto setup = deviceManager.getAudioDeviceSetup();
+        auto rate  = getCurrentSampleRate();
+        auto offDesired = (desiredInput.isNotEmpty()  && setup.inputDeviceName  != desiredInput)
+                       || (desiredOutput.isNotEmpty() && setup.outputDeviceName != desiredOutput);
+
+        if (offDesired)
+        {
+            health = Health::degraded;
+            text = "Wrong device: on \"" + setup.inputDeviceName + "\", want \"" + desiredInput + "\"";
+        }
+        else if (inputLooksLikeVirtualCable())
+        {
+            health = Health::degraded;
+            text = "Input is a virtual cable - feedback loop";
+        }
+        else if (! juce::exactlyEqual (rate, 48000.0))
+        {
+            health = Health::degraded;
+            text = "Running at " + juce::String (rate / 1000.0, 1) + " kHz (want 48)";
+        }
+        else
+        {
+            health = Health::ok;
+            text = setup.inputDeviceName + " -> " + setup.outputDeviceName
+                 + ", 48 kHz, xruns " + juce::String (cumulativeXRuns);
+        }
+    }
+
+    healthText = "MicHost: " + text;
+
+    if (health != previous)
+        michost::log ("Health: " + juce::String (health == Health::ok ? "OK"
+                                  : health == Health::degraded ? "DEGRADED" : "NO DEVICE")
+                      + " - " + text);
 }
 
 void AudioEngine::logCurrentDeviceState (const juce::String& context) const

@@ -126,6 +126,10 @@ MainComponent::MainComponent (AudioEngine& engineToUse)
     updateButtons();
     startTimerHz (2);
     setSize (900, 600);
+
+    // Any click inside the device selector marks the next device change as
+    // user-chosen (the watchdog must never adopt a fallback as intent).
+    deviceSelector.addMouseListener (this, true);
 }
 
 MainComponent::~MainComponent()
@@ -143,6 +147,12 @@ MainComponent::~MainComponent()
 void MainComponent::paint (juce::Graphics& g)
 {
     g.fillAll (getLookAndFeel().findColour (juce::ResizableWindow::backgroundColourId));
+}
+
+void MainComponent::mouseDown (const juce::MouseEvent& event)
+{
+    if (event.eventComponent == &deviceSelector || deviceSelector.isParentOf (event.eventComponent))
+        engine.noteUserDeviceInteraction();
 }
 
 void MainComponent::resized()
