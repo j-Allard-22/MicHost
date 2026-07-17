@@ -43,10 +43,29 @@ Start hidden in the tray: `MicHost.exe --minimized` (the in-app
    - Same for Playback → *CABLE Input* and Recording → *CABLE Output*
    - Also uncheck "Allow applications to take exclusive control" on
      *CABLE Output* so party chat can't seize it.
-3. Run MicHost: pick your GoXLR mic as **input** and *CABLE Input* as
-   **output** on the right; "Manage Plugins..." → scan your VST folders;
-   "Add..." to build the chain top-to-bottom.
-4. In Discord / Xbox app / Game Bar, select *CABLE Output* as the microphone.
+3. Install the plugins for the chain (all free):
+   - **ReaPlugs** (VST2: ReaGate, ReaEQ, ReaComp, ReaFir) — x64 installer from
+     [reaper.fm/reaplugs](https://www.reaper.fm/reaplugs/), default folder
+     `C:\Program Files\VSTPlugins`. VST2, so it needs a MicHost build with VST2
+     enabled (the personal build; not the distributable VST3-only build).
+   - **TDR Nova** and **TDR VOS SlickEQ** (VST3) — free from
+     [Tokyo Dawn Records](https://www.tokyodawn.net/tokyo-dawn-labs/); their
+     installers target `C:\Program Files\Common Files\VST3`.
+   - **LoudMax** (VST3) — copy `LoudMax.vst3` from
+     [Thomas Mundt's page](https://loudmax.blogspot.com/) into
+     `C:\Program Files\Common Files\VST3`.
+4. Run MicHost: pick your GoXLR mic as **input** and *CABLE Input* as
+   **output** on the right; "Manage Plugins..." → scan
+   `C:\Program Files\VSTPlugins` and `C:\Program Files\Common Files\VST3`;
+   "Add..." to build the chain top-to-bottom, e.g.
+   ReaGate → ReaFir (subtract) → ReaEQ / SlickEQ → ReaComp → TDR Nova →
+   LoudMax (ceiling ≈ −1 dBFS).
+5. Optional — **NVIDIA Broadcast denoise in front**: Broadcast is *not* a VST;
+   it is a separate app exposing a virtual "Microphone (NVIDIA Broadcast)"
+   device. Point Broadcast at the physical mic, then select the Broadcast
+   virtual mic as MicHost's **input**. No MicHost configuration beyond the
+   input choice.
+6. In Discord / Xbox app / Game Bar, select *CABLE Output* as the microphone.
 
 ## Voice-app checklist (or the chain gets re-processed)
 
