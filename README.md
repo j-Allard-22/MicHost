@@ -1,107 +1,140 @@
 # MicHost
 
-A minimal Windows tray app that captures a microphone (GoXLR) over shared-mode
-WASAPI, runs it through a serial VST2/VST3 plugin chain in-process, and renders
-the result directly into a virtual cable (VB-Cable Input). Discord / the Xbox
-PC app then select "CABLE Output" as their microphone. This replaces the
-OBS "Monitor and Output" routing hack with a purpose-built direct-render host.
+A minimal Windows tray app that captures a microphone over shared-mode WASAPI,
+runs it through a serial VST plugin chain in-process, and renders the result
+directly into a virtual cable (VB-Cable *CABLE Input*). Discord, the Xbox PC
+app, Game Bar — anything that takes a mic — then select *CABLE Output* as
+their microphone.
 
-Built on JUCE 8 (vendored in `external/JUCE`). Personal-use project — see
-Licensing below before distributing anything.
+The mic and the cable are two independently-clocked devices; MicHost
+rate-matches them with a fractional resampler steered by the ring-buffer fill
+level, so clock drift never turns into periodic clicks. A watchdog pins your
+chosen devices across reboots, USB unplugs and sleep/wake, and the tray icon
+shows health at a glance: **green** = processing on your chosen devices,
+**amber** = running but wrong device/sample rate/feedback risk, **red** = no
+device (waiting for it to reappear).
 
-## Build
+Free software under the GNU AGPLv3 (see `LICENSE`). Built on [JUCE 8](https://juce.com).
 
-Prerequisites (already set up if you used the bootstrap in this repo):
+## Quick start
 
-- Visual Studio 2022 Build Tools with the C++ workload
-- CMake ≥ 3.22 (portable copy in `../tools/cmake`)
-- JUCE 8.x cloned at `external/JUCE` (`git clone --depth 1 --branch 8.0.14
-  https://github.com/juce-framework/JUCE.git external/JUCE`)
-- Optional, for VST2 plugins (ReaPlugs): VST2 SDK headers at
-  `sdks/vst2/pluginterfaces/vst2.x/{aeffect.h, aeffectx.h}` — see Licensing
+1. **Install [VB-Cable](https://vb-audio.com/Cable/)** (run its installer as
+   admin, reboot if asked). Donationware, free for personal use.
+2. **Pin everything to 48 kHz** — the single most important reliability step.
+   VB-Cable defaults to 44.1 kHz; many mics (GoXLR included) are fixed at 48:
+   - `mmsys.cpl` → Recording → your mic → Properties → Advanced → 48000 Hz
+   - Same for Playback → *CABLE Input* and Recording → *CABLE Output*
+   - Uncheck "Allow applications to take exclusive control" on *CABLE Output*
+     so voice apps can't seize it.
+   (MicHost survives mismatched rates — the resampler absorbs them — but
+   matched rates avoid Windows' own hidden resampling on the endpoints.)
+3. **Install plugins** (all free):
+   - **TDR Nova** and **TDR VOS SlickEQ** (VST3) — [Tokyo Dawn Records](https://www.tokyodawn.net/tokyo-dawn-labs/)
+   - **LoudMax** (VST3) — copy `LoudMax.vst3` from
+     [Thomas Mundt's page](https://loudmax.blogspot.com/) into
+     `C:\Program Files\Common Files\VST3`
+   - **ReaPlugs** (ReaGate/ReaEQ/ReaComp/ReaFir) — [reaper.fm/reaplugs](https://www.reaper.fm/reaplugs/).
+     These are VST2, so they need a VST2-enabled build of MicHost (see
+     Building below); the distributed MicHost is VST3-only.
+4. **Run MicHost**: pick your mic as **input** and *CABLE Input* as
+   **output**; "Manage Plugins..." → add your plugin folders → Scan (scanning
+   runs in a separate process, so a crashing plugin can't take MicHost down);
+   "Add..." to build the chain top-to-bottom, e.g.
+   gate → denoise → EQ → compressor → limiter (ceiling ≈ −1 dBFS).
+5. Optional — **NVIDIA Broadcast denoise in front**: Broadcast is *not* a
+   VST; it exposes a virtual "Microphone (NVIDIA Broadcast)" device. Point
+   Broadcast at the physical mic, then select the Broadcast virtual mic as
+   MicHost's **input**.
+6. In Discord / Xbox app / Game Bar, select *CABLE Output* as the microphone.
+7. Enable **"Start with Windows"** in MicHost once everything works; it will
+   start hidden in the tray at login.
+
+### Voice-app checklist (or the chain gets re-processed)
+
+Discord and Windows both post-process mic input by default, which stacks
+badly on a tuned chain (their AGC undoes your compressor; Krisp on top of
+spectral denoise produces artifacts):
+
+- Discord → Voice & Video: disable Krisp/noise suppression, echo
+  cancellation, automatic gain control, and "Automatically determine input
+  sensitivity" (set a manual threshold).
+- Windows → Sound → Communications tab: "Do nothing".
+- Keep the CABLE endpoints' volume sliders at 0 dB / 100%.
+
+### If Windows blocks the exe
+
+An unsigned, unknown binary can be blocked by SmartScreen ("Windows protected
+your PC" → More info → Run anyway) or hard-blocked by **Smart App Control**
+on Windows 11 machines where it is enabled (SAC has no per-app exceptions;
+it can only be turned off system-wide in Windows Security → App & browser
+control — a one-way switch, so it's your call). Building from source on the
+same machine does not bypass SAC either.
+
+### Diagnostics
+
+- `MicHost.exe --list-devices` prints every capture/render device to stdout
+  and `MicHost-devices.txt`, then exits.
+- `MicHost.exe --minimized` starts hidden in the tray (the autostart toggle
+  registers exactly this).
+- Log file: `%APPDATA%\MicHost\MicHost.log` — device changes, watchdog
+  actions, xruns, and one bridge-telemetry line per minute
+  (`fill`, `corr` in ppm — the measured clock drift — `underruns/overruns`).
+  Include it in bug reports.
+- Settings: `%APPDATA%\MicHost\MicHost.settings` (device choices, scanned
+  plugin list, the chain with each plugin's saved state). Copy it to another
+  machine to migrate the chain; if a plugin is missing there, its slot is
+  kept greyed-out with settings preserved rather than dropped.
+
+## Soak-testing a new machine
+
+Run overnight via login autostart, then check the log: watchdog lines should
+show clean recovery (or nothing), cumulative xruns should stay ≈ 0, and the
+bridge `corr` should settle to a stable constant (that constant is your
+hardware's clock drift; ±200 ppm is unremarkable). For ground truth, record
+*CABLE Output* in Audacity for a couple of hours and listen/scan for
+discontinuities — counters can't prove the audio is clean, only a recording
+can.
+
+## Building from source
+
+Prerequisites:
+
+- Visual Studio 2022 Build Tools (C++ workload) and CMake ≥ 3.22
+- JUCE 8.0.14 cloned at `external/JUCE`:
+  `git clone --depth 1 --branch 8.0.14 https://github.com/juce-framework/JUCE.git external/JUCE`
 
 ```powershell
-& "..\tools\cmake\bin\cmake.exe" -S . -B build -G "Visual Studio 17 2022" -A x64
-& "..\tools\cmake\bin\cmake.exe" --build build --config Release --target MicHost
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+cmake --build build --config Release --target MicHost
 # -> build\MicHost_artefacts\Release\MicHost.exe
 ```
 
-Diagnostic mode (no GUI): `MicHost.exe --list-devices` prints every WASAPI
-capture/render device to stdout and `MicHost-devices.txt`, then exits.
+The exe links the CRT statically — no VC++ redistributable needed on target
+machines.
 
-Start hidden in the tray: `MicHost.exe --minimized` (the in-app
-"Start with Windows" toggle registers exactly this).
+**VST2 (optional, personal use only):** place the legacy VST2 SDK headers at
+`sdks/vst2/pluginterfaces/vst2.x/{aeffect.h, aeffectx.h}` before configuring
+and VST2 hosting is enabled automatically. Steinberg closed VST2 licensing in
+2018: the headers must never be committed or redistributed (`sdks/` is
+gitignored), and **any build you distribute must be VST3-only** — build it in
+a separate tree with `-DMICHOST_DISABLE_VST2=ON` (see `package.ps1`, which
+also zips the release).
 
-## First-time setup
+## Known limitations
 
-1. Install [VB-Cable](https://vb-audio.com/Cable/) (run its installer as admin,
-   reboot if asked). It is donationware and free for personal use.
-2. **Pin everything to 48 kHz** — this is the single most important reliability
-   step. GoXLR endpoints are fixed at 48 kHz; VB-Cable defaults to 44.1 kHz and
-   silently resamples (the classic source of crackle):
-   - `mmsys.cpl` → Recording → your GoXLR mic → Properties → Advanced → 48000 Hz
-   - Same for Playback → *CABLE Input* and Recording → *CABLE Output*
-   - Also uncheck "Allow applications to take exclusive control" on
-     *CABLE Output* so party chat can't seize it.
-3. Install the plugins for the chain (all free):
-   - **ReaPlugs** (VST2: ReaGate, ReaEQ, ReaComp, ReaFir) — x64 installer from
-     [reaper.fm/reaplugs](https://www.reaper.fm/reaplugs/), default folder
-     `C:\Program Files\VSTPlugins`. VST2, so it needs a MicHost build with VST2
-     enabled (the personal build; not the distributable VST3-only build).
-   - **TDR Nova** and **TDR VOS SlickEQ** (VST3) — free from
-     [Tokyo Dawn Records](https://www.tokyodawn.net/tokyo-dawn-labs/); their
-     installers target `C:\Program Files\Common Files\VST3`.
-   - **LoudMax** (VST3) — copy `LoudMax.vst3` from
-     [Thomas Mundt's page](https://loudmax.blogspot.com/) into
-     `C:\Program Files\Common Files\VST3`.
-4. Run MicHost: pick your GoXLR mic as **input** and *CABLE Input* as
-   **output** on the right; "Manage Plugins..." → scan
-   `C:\Program Files\VSTPlugins` and `C:\Program Files\Common Files\VST3`;
-   "Add..." to build the chain top-to-bottom, e.g.
-   ReaGate → ReaFir (subtract) → ReaEQ / SlickEQ → ReaComp → TDR Nova →
-   LoudMax (ceiling ≈ −1 dBFS).
-5. Optional — **NVIDIA Broadcast denoise in front**: Broadcast is *not* a VST;
-   it is a separate app exposing a virtual "Microphone (NVIDIA Broadcast)"
-   device. Point Broadcast at the physical mic, then select the Broadcast
-   virtual mic as MicHost's **input**. No MicHost configuration beyond the
-   input choice.
-6. In Discord / Xbox app / Game Bar, select *CABLE Output* as the microphone.
-
-## Voice-app checklist (or the chain gets re-processed)
-
-Discord and Windows both post-process mic input by default, which stacks badly
-on a tuned chain (their AGC undoes your compressor; Krisp on top of spectral
-denoise produces artifacts):
-
-- Discord → Voice & Video: disable Krisp/noise suppression, echo cancellation,
-  automatic gain control, and "Automatically determine input sensitivity"
-  (set a manual threshold).
-- Windows → Sound → Communications tab: "Do nothing".
-- Keep the CABLE endpoints' volume sliders at 0 dB / 100%.
-- Aim the chain's limiter ceiling around −1 dBFS.
-
-## Known limitations (v0.1)
-
-- **Clock drift**: the mic and the cable are independent clocks; JUCE pairs
-  them with a FIFO and does not rate-match. Expect a possible click every few
-  minutes-to-hours depending on hardware drift. The status bar's xrun counter
-  makes this measurable — soak-test it. A fractional resampler is the
-  designed fix (see roadmap).
-- Plugin scanning runs in-process: a crashing plugin can take the app down
-  during a scan (the crashed plugin is blacklisted on next start via the
-  dead-man's-pedal file).
-- Mono mics are fanned out to both chain channels; plugins are assumed
-  stereo-capable (true of ReaPlugs, TDR, LoudMax).
+- Plugins are assumed stereo-capable (true of ReaPlugs, TDR, LoudMax); mono
+  mics are fanned out to both channels before the chain.
 - An Xbox *console* can never receive this audio over software — that needs a
-  GoXLR line-out → controller aux loopback (hard boundary, don't chase it).
+  hardware loopback (e.g. mixer line-out → controller). The Xbox *PC app*
+  works fine.
+- The binary is unsigned; see "If Windows blocks the exe" above.
 
 ## Licensing
 
-- **JUCE 8**: AGPLv3 / commercial dual license. Personal, non-distributed use
-  is fine under AGPLv3.
-- **VST3 SDK**: MIT as of 3.8.0 (bundled with JUCE) — clean for any use.
-- **VST2 headers** (`sdks/vst2/`): Steinberg closed VST2 licensing in 2018.
-  Hosting VST2 plugins locally for personal use is accepted practice, but the
-  headers **must not be committed to any repository or redistributed** —
-  `sdks/` is gitignored for that reason. If you ever distribute this app,
-  build it VST3-only (delete `sdks/vst2` and the app degrades gracefully).
+- **MicHost**: GNU AGPL-3.0-or-later (see `LICENSE`).
+- **JUCE 8**: AGPLv3 / commercial dual license; this project uses it under
+  AGPLv3.
+- **VST3 SDK**: bundled with JUCE, GPLv3-compatible dual license (MIT as of
+  SDK 3.8.0) — fine for this use.
+- **VST2 headers**: not included, not licensable for distribution; local
+  personal builds only, as described above.

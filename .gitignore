@@ -1,5 +1,7 @@
 # Build output
 build/
+build-dist/
+MicHost-*-win64.zip
 
 # Vendored JUCE (re-clone: git clone --depth 1 --branch 8.0.14 https://github.com/juce-framework/JUCE.git external/JUCE)
 external/JUCE/

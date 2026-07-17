@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Jonathan Allard
+
 #include <JuceHeader.h>
 #include <iostream>
 
@@ -67,6 +70,17 @@ public:
         {
             juce::PopupMenu menu;
             menu.addItem ("Show MicHost", [this] { showWindow(); });
+            menu.addItem ("About MicHost...", []
+            {
+                juce::AlertWindow::showMessageBoxAsync (
+                    juce::MessageBoxIconType::InfoIcon,
+                    "MicHost " + juce::JUCEApplication::getInstance()->getApplicationVersion(),
+                    "A minimal mic -> VST chain -> virtual cable host.\n\n"
+                    "Free software under the GNU AGPLv3; built on JUCE.\n"
+                    "Provided WITHOUT ANY WARRANTY.\n\n"
+                    "Source code and documentation: see the README in the\n"
+                    "distribution or the project repository.");
+            });
             menu.addSeparator();
             menu.addItem ("Quit", [] { juce::JUCEApplication::getInstance()->systemRequestedQuit(); });
             menu.showMenuAsync (juce::PopupMenu::Options()); // pops at the mouse position
@@ -136,7 +150,7 @@ class MicHostApplication : public juce::JUCEApplication
 {
 public:
     const juce::String getApplicationName() override    { return "MicHost"; }
-    const juce::String getApplicationVersion() override { return "0.1.0"; }
+    const juce::String getApplicationVersion() override { return MICHOST_VERSION; } // single-sourced from CMake project VERSION
     // Single instance for the tray app, but two kinds of secondary process
     // must be allowed through (otherwise JUCE forwards their command line to
     // the running instance and they exit silently): the --list-devices
