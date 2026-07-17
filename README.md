@@ -14,7 +14,8 @@ shows health at a glance: **green** = processing on your chosen devices,
 **amber** = running but wrong device/sample rate/feedback risk, **red** = no
 device (waiting for it to reappear).
 
-Free software under the GNU AGPLv3 (see `LICENSE`). Built on [JUCE 8](https://juce.com).
+Free software under the GNU AGPLv3 (see `LICENSE`); the corresponding source is
+at <https://github.com/j-Allard-22/MicHost>. Built on [JUCE 8](https://juce.com).
 
 ## Quick start
 
@@ -118,7 +119,9 @@ and VST2 hosting is enabled automatically. Steinberg closed VST2 licensing in
 2018: the headers must never be committed or redistributed (`sdks/` is
 gitignored), and **any build you distribute must be VST3-only** — build it in
 a separate tree with `-DMICHOST_DISABLE_VST2=ON` (see `package.ps1`, which
-also zips the release).
+also zips the release). `package.ps1` runs under either Windows PowerShell 5.1
+or PowerShell 7 — its only modern cmdlet, `Compress-Archive`, ships with
+Windows 11, so no separate PowerShell 7 install is required.
 
 ## Known limitations
 
@@ -131,7 +134,8 @@ also zips the release).
 
 ## Licensing
 
-- **MicHost**: GNU AGPL-3.0-or-later (see `LICENSE`).
+- **MicHost**: GNU AGPL-3.0-or-later (see `LICENSE`). The complete corresponding
+  source for any distributed binary is at <https://github.com/j-Allard-22/MicHost>.
 - **JUCE 8**: AGPLv3 / commercial dual license; this project uses it under
   AGPLv3.
 - **VST3 SDK**: bundled with JUCE, GPLv3-compatible dual license (MIT as of

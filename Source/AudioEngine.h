@@ -64,6 +64,10 @@ public:
     // which would feed the cable back into itself.
     bool inputLooksLikeVirtualCable() const;
 
+    // True when the input and output devices are the same endpoint (capturing
+    // what we render) - a feedback loop the name-match above can miss.
+    bool inputEqualsOutput() const;
+
     // Total xruns across both devices and across device reopens (each raw
     // counter resets to zero on reopen, useless for soak tests by itself).
     int getCumulativeXRuns() const noexcept { return cumulativeXRuns; }

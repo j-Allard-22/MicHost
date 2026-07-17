@@ -78,8 +78,8 @@ public:
                     "A minimal mic -> VST chain -> virtual cable host.\n\n"
                     "Free software under the GNU AGPLv3; built on JUCE.\n"
                     "Provided WITHOUT ANY WARRANTY.\n\n"
-                    "Source code and documentation: see the README in the\n"
-                    "distribution or the project repository.");
+                    "Corresponding source (AGPLv3):\n"
+                    "https://github.com/j-Allard-22/MicHost");
             });
             menu.addSeparator();
             menu.addItem ("Quit", [] { juce::JUCEApplication::getInstance()->systemRequestedQuit(); });

@@ -363,6 +363,11 @@ void AudioEngine::updateHealth()
             health = Health::degraded;
             text = "Input is a virtual cable - feedback loop";
         }
+        else if (inputEqualsOutput())
+        {
+            health = Health::degraded;
+            text = "Input and output are the same device - feedback loop";
+        }
         else if (! juce::exactlyEqual (inRate, 48000.0) || ! juce::exactlyEqual (outRate, 48000.0))
         {
             health = Health::degraded;
@@ -546,6 +551,15 @@ bool AudioEngine::inputLooksLikeVirtualCable() const
         || name.containsIgnoreCase ("VB-Audio")
         || name.containsIgnoreCase ("Voicemeeter")
         || name.containsIgnoreCase ("Virtual Audio Cable"); // VAC "Line 1 (Virtual Audio Cable)"
+}
+
+bool AudioEngine::inputEqualsOutput() const
+{
+    auto in  = inputDeviceManager.getAudioDeviceSetup().inputDeviceName;
+    auto out = outputDeviceManager.getAudioDeviceSetup().outputDeviceName;
+
+    // Same device on both sides means we capture our own render output.
+    return in.isNotEmpty() && out.isNotEmpty() && in.equalsIgnoreCase (out);
 }
 
 void AudioEngine::saveChain()

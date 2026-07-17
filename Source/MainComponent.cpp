@@ -299,6 +299,9 @@ void MainComponent::timerCallback()
     if (engine.inputLooksLikeVirtualCable())
         warning = "Warning: the selected INPUT is a virtual-cable endpoint - that loops the cable "
                   "into itself. Select your real microphone instead.";
+    else if (engine.inputEqualsOutput())
+        warning = "Warning: the INPUT and OUTPUT are the same device - that captures our own "
+                  "render output (feedback loop). Pick distinct input/output devices.";
     else if ((inRate > 0.0 && ! juce::exactlyEqual (inRate, 48000.0))
              || (outRate > 0.0 && ! juce::exactlyEqual (outRate, 48000.0)))
         warning = "Warning: running at " + juce::String (inRate / 1000.0, 1) + "/"
